@@ -148,7 +148,7 @@ awk -v OFS='\t' -v minid=${MINID} -v minlen=${MINLEN} -v sseqid=${COL_SSEQID} -v
 echo "Finding genes in query genome that intersect with hit ranges"
 bedtools intersect -wb -a ${bed_blast1} -b ${QUERY_GFF} | cut -f4- | awk '$3=="gene"' > ${gff_intersect}
 ## get gid of intersecting genes
-cut -f9 ${gff_intersect} | grep -Po '(^ID=|;ID=)\K[^;]+' > ${gid_intersect}
+cut -f9 ${gff_intersect} | grep -Po '(^ID=|;ID=)\K[^;]+' | sort | uniq > ${gid_intersect}
 ## get sequences of intersecting genes
 echo "Extracting sequences of intersecting genes"
 ${get_seq} --gene $(tr '\n' ',' < ${gid_intersect} | sed 's/,\+/,/g' | sed 's/,$//') \
