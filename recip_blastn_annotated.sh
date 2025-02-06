@@ -5,6 +5,7 @@
 
 ORIGINAL_DIR=$(pwd)
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+SCRIPT_NAME="$(basename "$0")"
 DIR_SRC=/mnt/chaelab/rachelle/src
 
 OUTFMT6_COLS=( qseqid sseqid pident length mismatch gapopen qstart qend sstart send qlen slen evalue bitscore )
@@ -47,6 +48,7 @@ MINLEN_DEFAULT=0
 MINID_DEFAULT=0
 FEATURE_DEFAULT='gene'
 FLANK_DEFAULT=200
+RELAX_DEFAULT=0
 
 while (( "$#" )); do
     case "$1" in
@@ -54,7 +56,7 @@ while (( "$#" )); do
         -d|--dir) DIR="${2}";;
         -g|--gene) GENE="${2}";;
         --reference-fasta) REFERENCE_FA="${2}";;
-        --reference-gff) REFENCE_GFF="${2}";; ## GFF file containing information on genes in -g/--gene
+        --reference-gff) REFERENCE_GFF="${2}";; ## GFF file containing information on genes in -g/--gene
         --query-fasta) QUERY_FA="${2}";; ## genome in which to find the homologues
         --query-gff) QUERY_GFF="${2}";;
         --task1) TASK1="${2}";; ## valid tasks: blastn, blastn-short, dc-megablast, megablast, rmblastn
@@ -62,11 +64,13 @@ while (( "$#" )); do
         --minlen) MINLEN="${2}";;
         --minid) MINID="${2}";;
         --flank) FLANK="${2}";;
+        --relax) RELAX=1;;
+        --strict) RELAX=0;; ## whichever comes last (--relax or --strict) in the command will be used
         # --complete) COMPLETE='True';;
         # --feature) FEATURE="${2}";;
         # --adjust-dir) ADJ_DIR='True';;
-        # -h|--help) man -l ${SCRIPT_DIR}/MANUAL_get_seqs.1; exit 0;;
-        # --readme) cat ${SCRIPT_DIR}/README; exit 0;;
+        -h|--help) man -l ${SCRIPT_DIR}/MANUAL_recip_blastn_annotated.1; exit 0;;
+        --readme) cat ${SCRIPT_DIR}/README.md; exit 0;;
     esac
     shift
 done
@@ -84,6 +88,7 @@ MINID="${MINID:-${MINID_DEFAULT}}"
 # ADJ_DIR="${ADJ_DIR:-False}"
 # FEATURE="${FEATURE:-${FEATURE_DEFAULT}}"
 FLANK=${FLANK:-${FLANK_DEFAULT}}
+RELAX=${RELAX:-${RELAX_DEFAULT}}
 
 
 ## throw error if directory not provided
@@ -105,7 +110,9 @@ DIR="$(realpath ${DIR})"
 echo "Output files will be generated in ${DIR}"
 
 ## write log
-printf -- "${params}\n\n-p|--prefix:\t${PREFIX}\n-d|--dir:\t${DIR}\n-g|--gene:\t${GENE}\n--reference-fasta:\t${REFERENCE_FA}\n--reference-gff:\t${REFERENCE_GFF}\n--query-fasta:\t${QUERY_FA}\n--query-gff:\t${QUERY_GFF}\n--task1:\t${TASK1}\n--task2:\t${TASK2}\n--minlen:\t${MINLEN}\n--minid:\t${MINID}\n" > ${DIR}/${PREFIX}_rblastn.log
+# script_dir=$(cd $(dirname “${BASH_SOURCE:-$0}”) && pwd)
+script_path=$DIR_PATH/$(basename “${BASH_SOURCE:-$0}”)
+printf -- "${params}\n\n${script_path}\n\n-p|--prefix:\t${PREFIX}\n-d|--dir:\t${DIR}\n-g|--gene:\t${GENE}\n--reference-fasta:\t${REFERENCE_FA}\n--reference-gff:\t${REFERENCE_GFF}\n--query-fasta:\t${QUERY_FA}\n--query-gff:\t${QUERY_GFF}\n--task1:\t${TASK1}\n--task2:\t${TASK2}\n--minlen:\t${MINLEN}\n--minid:\t${MINID}\n" > ${DIR}/${PREFIX}_rblastn.log
 
 ## getting annotations and sequences
 dir_qgenes=${DIR}/query_genes
@@ -118,6 +125,11 @@ echo ${GENE} | tr ',' '\n' > ${genes_gid}
 ## subset GFF annotations for these genes
 echo "Filtering reference annotations for query genes"
 ${extract_gff_features} ${REFERENCE_GFF} ${genes_gid} ${genes_gff} GFF
+## if no annotations, abort
+if [ $(grep -vP '^$' ${genes_gff} | wc -l) -eq 0 ]; then
+    echo "No annotations found (${GENE}). Are you sure the gene IDs and/or GFF file are correct?"
+    exit 2
+fi
 ## get gene sequences
 echo "Extracting query gene sequences"
 start_t=$(date '+%Y-%m-%d %T')
@@ -125,6 +137,11 @@ ${get_seq} --gene ${GENE} --acc ref --feature gene \
            --complete --adjust-dir \
            --reference ${REFERENCE_FA} --gff ${genes_gff} \
            --dir ${dir_qgenes} --out ${genes_fasta} --no-bed
+## if no sequence entries, abort
+if [ $(grep '>' ${genes_fasta} | wc -l) -eq 0 ]; then
+    echo "Unable to extract gene sequences (${GENE}). Are you sure the gene IDs and/or GFF file are correct?"
+    exit 2
+fi
 
 ## first blast (query genes to query fasta)
 dir_blast1=${DIR}/blast1
@@ -139,6 +156,11 @@ echo "Executing first BLASTN of query genes against query genome"
 run_blast6 blastn -query ${genes_fasta} -subject ${QUERY_FA} \
            -outfmt "${OUTFMT}" \
            -out ${tsv_blast1} -task ${TASK1}
+## if no hits, abort (there is a header row so an empty file has 1 non-empty line)
+if [ $(grep -vP '^$' ${tsv_blast1} | wc -l) -eq 1 ]; then
+    echo "No BLAST hits found in query genome. Exiting."
+    exit 3
+fi
 ## append newline because the output doesn't end with newline and this might throw problems in some programmes
 printf "\n" >> ${tsv_blast1}
 ## get hit ranges
@@ -147,6 +169,11 @@ awk -v OFS='\t' -v minid=${MINID} -v minlen=${MINLEN} -v sseqid=${COL_SSEQID} -v
 ## get gff of intersecting genes (feature type = gene)
 echo "Finding genes in query genome that intersect with hit ranges"
 bedtools intersect -wb -a ${bed_blast1} -b ${QUERY_GFF} | cut -f4- | awk '$3=="gene"' > ${gff_intersect}
+## if no hits, abort (there is a header row so an empty file has 1 non-empty line)
+if [ $(grep -vP '^$' ${gff_intersect} | wc -l) -eq 0 ]; then
+    echo "No hits intersect with at least one annotated gene. Exiting."
+    exit 3
+fi
 ## get gid of intersecting genes
 cut -f9 ${gff_intersect} | grep -Po '(^ID=|;ID=)\K[^;]+' | sort | uniq > ${gid_intersect}
 ## get sequences of intersecting genes
@@ -156,6 +183,11 @@ ${get_seq} --gene $(tr '\n' ',' < ${gid_intersect} | sed 's/,\+/,/g' | sed 's/,$
            --complete --adjust-dir \
            --reference ${QUERY_FA} --gff ${gff_intersect} \
            --dir ${dir_blast1} --out ${fa_intersect} --no-bed
+## if no sequence entries, abort
+if [ $(grep '>' ${fa_intersect} | wc -l) -eq 0 ]; then
+    echo "Unable to extract gene sequences for candidate homologues. Are you sure the query GFF file is correct?"
+    exit 2
+fi
 
 ## second blast (intersected genes to reference fasta)
 dir_blast2=${DIR}/blast2
@@ -192,12 +224,26 @@ final_genes_gid=${dir_final}/${PREFIX}.final.gid
 gff_final=${dir_final}/${PREFIX}.final.gff
 fa_final_gene=${dir_final}/${PREFIX}.final.gene.fasta
 fa_final_cds=${dir_final}/${PREFIX}.final.CDS.fasta
+fa_final_pep=${dir_final}/${PREFIX}.final.pep.fasta
 ## writing report
 echo "Writing report"
 python3 -c "import sys; sys.path.append('${SCRIPT_DIR}/scripts'); from generate_final_report import generate_report; generate_report('${sum_recip}', '${GENE}'.split(','), '${txt_report}', col_qseqid=${COL_QSEQID}-1, col_bitscore=${COL_BITSCORE}-1)"
 ## filter query GFF for annotations of best candidates (i.e. candidates which top bitscore is to a query gene)
 echo "Extracting IDs of best candidate homologues"
-awk 'NR>1 {if($4==1) {print $1}}' ${txt_report} > ${final_genes_gid}
+## if not relax (i.e. reject if highest bitscore to target is equal to non-target)
+if [ "${RELAX}" == '0'  ]; then
+    echo "--strict mode--"
+    awk 'NR>1 {if($7=="T") {print $1}}' ${txt_report} > ${final_genes_gid}
+else
+    echo "--relax mode--"
+    awk 'NR>1 {if($4==1) {print $1}}' ${txt_report} > ${final_genes_gid}
+fi
+## if no homologues, abort
+if [ $(grep -vP '^$' ${final_genes_gid} | wc -l) -eq 0 ]; then
+    echo "No homologues found. Try using --relax."
+    exit 3
+fi
+## make genbank files
 echo "Making genbank files for best candidate homologues"
 python3 -c "import sys; sys.path.append('${DIR_SRC}'); from extract_seq_and_annotate import get_flanked_seq; from reference import AnnotatedFasta; from data_manip import splitlines; ref = AnnotatedFasta('${QUERY_FA}', '${QUERY_GFF}', name = 'query'); get_flanked_seq(ref, splitlines('${final_genes_gid}'), flank = ${FLANK}, feature_type = 'gene', prefix = '${PREFIX}.final', gff_subset = '${gff_final}', gb_dir = '${dir_gb}')"
 ## get sequences
@@ -212,4 +258,10 @@ ${get_seq} --gene $(tr '\n' ',' < ${final_genes_gid} | sed 's/,\+/,/g' | sed 's/
            --adjust-dir \
            --reference ${QUERY_FA} --gff ${gff_final} \
            --dir ${dir_final} --out ${fa_final_cds} --no-bed
+${get_seq} --gene $(tr '\n' ',' < ${final_genes_gid} | sed 's/,\+/,/g' | sed 's/,$//') \
+           --acc ref --feature CDS \
+           --adjust-dir --translate \
+           --reference ${QUERY_FA} --gff ${gff_final} \
+           --dir ${dir_final} --out ${fa_final_pep} --no-bed
 
+exit 0

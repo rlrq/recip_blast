@@ -3,6 +3,7 @@
 ORIGINAL_DIR=$(pwd)
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 
+source /mnt/chaelab/rachelle/src/run_blast6.sh
 source "${SCRIPT_DIR}/scripts/reciprocal_blastn_annaLena70.sh"
 
 ## if no arguments, show manual ## TODO
@@ -19,6 +20,8 @@ TASK_DEFAULT='default'
 MINLEN_DEFAULT=0
 MINID_DEFAULT=0
 FEATURE_DEFAULT='gene'
+
+params=${@}
 
 while (( "$#" )); do
     case "$1" in
@@ -71,7 +74,8 @@ DIR="$(realpath ${DIR})"
 echo "Output files will be generated in ${DIR}"
 
 ## write log
-printf -- "-g|--gene:\t${GENE}\n-f|--fasta:\t${FASTA}\n-p|--prefix:\t${PREFIX}\n-d|--dir:\t${DIR}\n--feature:\t${FEATURE}\n--complete:\t${COMPLETE}\n--task1:\t${TASK1}\n--task2:\t${TASK2}\n--db1:\t${DB1}\n--db2:\t${DB2}\n--minlen:\t${MINLEN}\n--minid:\t${MINID}\n" > ${DIR}/${PREFIX}_rblastn.log
+script_path="$SCRIPT_DIR/${SCRIPT_NAME}"
+printf -- "${params}\n\n${script_path}\n\n-g|--gene:\t${GENE}\n-f|--fasta:\t${FASTA}\n-p|--prefix:\t${PREFIX}\n-d|--dir:\t${DIR}\n--feature:\t${FEATURE}\n--complete:\t${COMPLETE}\n--task1:\t${TASK1}\n--task2:\t${TASK2}\n--db1:\t${DB1}\n--db2:\t${DB2}\n--minlen:\t${MINLEN}\n--minid:\t${MINID}\n" > ${DIR}/${PREFIX}_rblast.log
 
 ## getting sequences
 if ! [ -z "${GENE}" ]; then
@@ -92,9 +96,21 @@ echo "Executing first blast"
 blastn_${TASK1} ${DB1} ${blast1_dir} ${blast1_al70_prefix} ${fasta} ${blast1_tsv}
 # blastn_to_al70 ${blast1_dir} ${PREFIX} ${fasta} ${blast1_tsv} ## uncomment if it's decided that this is planned to only work for Anna Lena's dataset
 
+# blast1_prefix=${PREFIX}.blast1
+# blast1_tsv=${blast1_dir}/${blast1_prefix}.blastn-${TASK1}.tsv ## blast1 output
+# mkdir -p ${blast1_dir}
+# echo "Executing first blast"
+# run_blast6 blastn -query ${blast1_dir} ${blast1_prefix} ${fasta} ${blast1_tsv} \
+#            -task ${TASK1} ${DB1}
+
 ## filter + reciprocal blast
 contigs_fasta=${blast1_dir}/${blast1_al70_prefix}.minid${MINID}_minlen${MINLEN}.contigs.fasta
 filter_contig ${blast1_dir} ${blast1_al70_prefix} ${blast1_tsv} ${MINLEN} ${MINID} ${contigs_fasta}
+
+# ## filter + merge + extract sequences
+
+# blast1_fa=${blast1_dir}/${blast1_prefix}.
+# python3 -c "import sys; sys.path.append('${SCRIPT_DIR}/scripts'); import merge_hits; "
 
 ## reciprocal blast
 blast2_dir=${DIR}/blast2
@@ -104,3 +120,11 @@ mkdir -p ${blast2_dir}
 echo "Executing second blast"
 blastn_${TASK2} ${DB2} ${blast2_dir} ${blast2_col0_prefix} ${contigs_fasta} ${blast2_tsv}
 # blastn_to_col0nlr ${blast2_dir} ${blast1_al70_prefix} ${contigs_fasta} ## uncomment if it's decided that this is planned to only work for dataset of known Col-0 NLRs
+
+# ## reciprocal blast
+# blast2_dir=${DIR}/blast2
+# blast2_prefix=${blast1_prefix}.blast2
+# blast2_tsv=${blast2_dir}/${blast2_prefix}.blastn_summary.tsv ## blast2 (reciprocal blast) output
+# mkdir -p ${blast2_dir}
+# echo "Executing second blast"
+# blastn_${TASK2} ${DB2} ${blast2_dir} ${blast2_prefix} ${contigs_fasta} ${blast2_tsv}
